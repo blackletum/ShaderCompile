@@ -15,10 +15,16 @@
 #define NOIME
 #define NOMINMAX
 
-#include <windows.h>
-
-#include <dbghelp.h>
-#include "d3dcompiler.h"
+#ifdef _WIN32
+	#include <windows.h>
+	#include <dbghelp.h>
+	#include "d3dcompiler.h"
+#else
+	#include "d3dcompiler_linux.h"
+	#include <csignal>
+	#include <sys/ioctl.h>
+	#include <unistd.h>
+#endif
 #include <atomic>
 #include <chrono>
 #include <cstdlib>
@@ -61,7 +67,9 @@ extern "C" {
 
 #include "LZMA.hpp"
 
-#pragma comment( lib, "DbgHelp" )
+#ifdef _WIN32
+	#pragma comment( lib, "DbgHelp" )
+#endif
 
 // Type conversions should be controlled by programmer explicitly - shadercompile makes use of 64-bit integer arithmetics
 #pragma warning( error : 4244 )
@@ -1268,6 +1276,7 @@ static void CompileShaders( std::unique_ptr<CfgProcessor::CfgEntryInfo[]> arrEnt
 	std::cout << "\r"sv << clr::escaped( lineRewind ) << endLine;
 }
 
+#ifdef _WIN32
 static LONG WINAPI ExceptionFilter( _EXCEPTION_POINTERS* pExceptionInfo )
 {
 	constexpr const auto iType = static_cast<MINIDUMP_TYPE>( MiniDumpNormal | MiniDumpWithDataSegs | MiniDumpWithIndirectlyReferencedMemory | MiniDumpWithThreadInfo );
@@ -1329,6 +1338,7 @@ static LONG WINAPI ExceptionFilter( _EXCEPTION_POINTERS* pExceptionInfo )
 
 	return EXCEPTION_CONTINUE_SEARCH;
 }
+#endif // _WIN32
 
 static void PrintCompileErrors( bool skipWarnings )
 {
@@ -1408,6 +1418,7 @@ static void PrintCompileErrors( bool skipWarnings )
 }
 
 static bool s_write = true;
+#ifdef _WIN32
 static BOOL WINAPI CtrlHandler( DWORD signal )
 {
 	if ( signal == CTRL_C_EVENT )
@@ -1421,6 +1432,16 @@ static BOOL WINAPI CtrlHandler( DWORD signal )
 
 	return FALSE;
 }
+#else
+// The same on Ctrl-C, minus the power-state call
+static void SigintHandler( int )
+{
+	s_write = false;
+	if ( auto inst = ProcessCommandRange_Singleton::Instance() )
+		inst->Stop();
+	PrintCompileErrors( false );
+}
+#endif
 
 static void WriteStats( bool skipWarnings )
 {
@@ -1447,6 +1468,7 @@ static constexpr const char* const validModels[] =
 
 int main( int argc, const char* argv[] )
 {
+#ifdef _WIN32
 	{
 		const HANDLE console = GetStdHandle( STD_OUTPUT_HANDLE );
 		DWORD mode;
@@ -1457,6 +1479,13 @@ int main( int argc, const char* argv[] )
 			std::cout << clr::nocolorize;
 		SetConsoleCtrlHandler( CtrlHandler, true );
 	}
+#else
+	if ( isatty( STDOUT_FILENO ) )
+		std::cout << clr::colorize;
+	else
+		std::cout << clr::nocolorize;
+	signal( SIGINT, SigintHandler );
+#endif
 
 	bool parseLegacy = false;
 	for ( int i = 1; i < argc; i++ )
@@ -1505,16 +1534,24 @@ int main( int argc, const char* argv[] )
 		cmdLine.add( "1", false, 1, 0, "Set optimization level (0-3)", "/O", "-optimize" );
 		cmdLine.add( "", false, -1, ',', "Set shader type, if compiling multiple different shaders, values can be separated by ','", "/T", "-types", new ez::ezOptionValidator{ ez::ezOptionValidator::T, ez::ezOptionValidator::IN, validTypes, std::size( validTypes ), false } );
 		cmdLine.add( "", false, 0, 0, "Generate ShaderComboSemantics_t and friends for shader", "-csgo", "/csgo" );
+		// Linux build only, the DLL is in the binary and this swaps in another copy, see d3dcompiler_linux.h
+		cmdLine.add( "", false, 1, 0, "Use this d3dcompiler_47.dll instead of the built-in one (Linux build)", "-d3dcompiler", "/d3dcompiler" );
 	}
 
 	cmdLine.parse( argc, argv );
 
 	if ( cmdLine.isSet( "-help" ) )
 	{
+#ifdef _WIN32
 		CONSOLE_SCREEN_BUFFER_INFO csbi;
 		GetConsoleScreenBufferInfo( GetStdHandle( STD_OUTPUT_HANDLE ), &csbi );
+		const int columns = csbi.srWindow.Right - csbi.srWindow.Left + 1;
+#else
+		struct winsize ws;
+		const int columns = ioctl( STDOUT_FILENO, TIOCGWINSZ, &ws ) == 0 && ws.ws_col > 0 ? ws.ws_col : 120;
+#endif
 		std::string usage;
-		cmdLine.getUsageDescriptions( usage, csbi.srWindow.Right - csbi.srWindow.Left + 1, ez::ezOptionParser::ALIGN );
+		cmdLine.getUsageDescriptions( usage, columns, ez::ezOptionParser::ALIGN );
 		std::cout << cmdLine.overview << "\n\n"
 				  << "Usage: "sv << cmdLine.syntax << "\n\n"sv
 				  << clr::green << clr::bold << "OPTIONS:\n"sv
@@ -1715,9 +1752,24 @@ int main( int argc, const char* argv[] )
 	g_bVerbose2 = cmdLine.isSet( "-verbose2" );
 	g_bFastFail = cmdLine.isSet( "-fastfail" );
 
+#ifdef _WIN32
 	// Setting up the minidump handlers
 	SetUnhandledExceptionFilter( ExceptionFilter );
 	SetThreadExecutionState( ES_CONTINUOUS | ES_SYSTEM_REQUIRED );
+#else
+	// The DLL is loaded up front so a missing or wrong file fails here, before any shader is parsed
+	{
+		std::string dllPath;
+		if ( !parseLegacy && cmdLine.isSet( "-d3dcompiler" ) )
+			cmdLine.get( "-d3dcompiler" )->getString( dllPath );
+		char err[512];
+		if ( !D3DCompilerLinux_Load( dllPath.empty() ? nullptr : dllPath.c_str(), err, sizeof( err ) ) )
+		{
+			std::cout << clr::red << clr::bold << "ERROR: cannot load d3dcompiler_47.dll: "sv << clr::reset << err << std::endl;
+			return -1;
+		}
+	}
+#endif
 
 	auto entries = Shared_ParseListOfCompileCommands( std::move( files ), cmdLine.isSet( "-force" ), cmdLine.isSet( "-verbose_preprocessor" ), isCSGO );
 
@@ -1745,7 +1797,9 @@ int main( int argc, const char* argv[] )
 		}
 	}
 
+#ifdef _WIN32
 	SetThreadExecutionState( ES_CONTINUOUS );
+#endif
 
 	return gsl::narrow_cast<int>( g_ShaderHadError.size() );
 }

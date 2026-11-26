@@ -905,7 +905,7 @@ void ComboHandleImpl::FormatCommandHumanReadable( gsl::span<char> pchBuffer ) co
 	_strupr_s( version );
 	int o = sprintf_s( pchBuffer.data(), pchBuffer.size(),
 		"fxc /DCENTROIDMASK=%d /DSHADERCOMBO=%llx /DSHADER_MODEL_%s=1 /T%s /Emain",
-		m_pEntry->m_eiInfo.m_nCentroidMask, m_iComboNumber, version, m_pEntry->m_eiInfo.m_szShaderVersion.data() );
+		m_pEntry->m_eiInfo.m_nCentroidMask, (unsigned long long)m_iComboNumber, version, m_pEntry->m_eiInfo.m_szShaderVersion.data() );
 
 	for ( pSetValues = pnValues, pSetDef = pDefVars; pSetValues < pnValuesEnd && pDefVars < pDefVarsEnd; ++pSetValues, ++pSetDef )
 		o += sprintf_s( &pchBuffer[o], pchBuffer.size() - o, " /D%s=%d", pSetDef->Name().c_str(), *pSetValues );
@@ -1014,7 +1014,7 @@ static void SetupConfiguration( const std::vector<CfgProcessor::ShaderConfig>& c
 
 		// We also establish mapping by either splitting the
 		// combos into 500 intervals or stepping by every 1000 combos.
-		const uint64_t iPartStep = std::max( 1000ULL, chi.m_numCombos / 500 );
+		const uint64_t iPartStep = std::max<uint64_t>( 1000, chi.m_numCombos / 500 );
 		for ( uint64_t iRecord = nCurrentCommand + iPartStep; iRecord < nCurrentCommand + chi.m_numCombos; iRecord += iPartStep )
 		{
 			uint64_t iAdvance = iPartStep;

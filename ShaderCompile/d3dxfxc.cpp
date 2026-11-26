@@ -18,12 +18,16 @@
 #include "basetypes.h"
 #include "cfgprocessor.h"
 #include "cmdsink.h"
-#include "d3dcompiler.h"
+#ifdef _WIN32
+	#include "d3dcompiler.h"
+	#pragma comment( lib, "D3DCompiler" )
+#else
+	// The same D3DCompile, from d3dcompiler_47.dll loaded by linux/peloader.c, see d3dcompiler_linux.h
+	#include "d3dcompiler_linux.h"
+#endif
 #include "gsl/narrow"
 #include <malloc.h>
 #include <vector>
-
-#pragma comment( lib, "D3DCompiler" )
 
 CSharedFile::CSharedFile( std::vector<char>&& data ) noexcept : std::vector<char>( std::forward<std::vector<char>>( data ) )
 {

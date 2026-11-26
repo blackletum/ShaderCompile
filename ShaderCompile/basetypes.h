@@ -12,14 +12,7 @@
 #endif
 
 #if !defined(_WIN32) && !defined(_WIN64)
-  #ifndef strcpy_s
-    #define strcpy_s(dst, n, src) strncpy(dst, src, n)
-  #endif
-  #ifndef sprintf_s
-    #define sprintf_s snprintf
-  #endif
-  #define _strupr_s strupr
-  #define _strdup strdup
+	#include "compat_linux.h"
 #endif
 
 #if !defined(_MSC_VER)

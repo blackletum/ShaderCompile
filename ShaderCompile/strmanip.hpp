@@ -3,6 +3,11 @@
 #include <iomanip>
 #include <string_view>
 
+// MSVC and mingw spell the default convention, Linux has only the one
+#ifndef __cdecl
+	#define __cdecl
+#endif
+
 template <class _Arg>
 struct _Smanip2
 {
